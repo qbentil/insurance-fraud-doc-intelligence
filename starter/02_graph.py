@@ -3,7 +3,7 @@
 ======================================================
 WORKSHOP PHASE 3 · 45 minutes
 
-YOUR TASK: Read extracted_data.json and write each entity
+YOUR TASK: Read results/combined.json and write each entity
 into Neo4j as nodes and relationships.
 
 Graph Model:
@@ -216,9 +216,9 @@ def write_document(driver, doc: dict):
 def run_graph_population():
     console.rule("[bold cyan]Phase 3: Graph Population[/bold cyan]")
 
-    data_path = _ROOT / "extracted_data.json"
+    data_path = _ROOT / "results" / "combined.json"
     if not data_path.exists():
-        console.print("[red]extracted_data.json not found. Run 01_extract.py first.[/red]")
+        console.print("[red]results/combined.json not found. Run 01_extract.py first.[/red]")
         return
 
     with open(data_path) as f:

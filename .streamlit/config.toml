@@ -1,0 +1,3 @@
+[server]
+# Disable native file watcher — macOS + Streamlit + gRPC/LLM often segfaults with it
+fileWatcherType = "none"

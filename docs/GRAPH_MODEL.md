@@ -4,7 +4,7 @@
 
 | Label | Key Property | Description |
 |-------|-------------|-------------|
-| `Claimant` | `id` (Ghana Card) | Person filing a claim |
+| `Claimant` | `id` (Ghana Card) | Person filing a claim. Also: `name`, `phone`, `aliases` (list — Ring C name variants) |
 | `Policy` | `number` | Insurance policy certificate |
 | `Claim` | `number` | Individual insurance claim |
 | `Doctor` | `reg` (MDC-GH-XXXXX) | Attending physician |

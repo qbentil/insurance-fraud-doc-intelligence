@@ -20,8 +20,10 @@ from typing import Any
 
 from neo4j import GraphDatabase
 
-from bonus.llm import get_llm
 from bonus.schema_context import GRAPH_SCHEMA
+
+# Lazy-import LLM inside functions so Streamlit's main process can load this
+# module for Neo4j helpers without pulling in gRPC/Gemini until ask() runs.
 
 # Words that must never appear in generated Cypher (case-insensitive)
 _FORBIDDEN = re.compile(
@@ -44,6 +46,34 @@ def get_driver():
 def node_count(driver) -> int:
     with driver.session() as session:
         return session.run("MATCH (n) RETURN count(n) AS c").single()["c"]
+
+
+def _to_plain(value: Any) -> Any:
+    """Convert Neo4j / nested values into JSON-safe Python (avoids Streamlit/pyarrow crashes)."""
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return int(value)
+    if isinstance(value, float):
+        return float(value)
+    if isinstance(value, list):
+        return [_to_plain(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _to_plain(v) for k, v in value.items()}
+    # Neo4j temporal
+    if hasattr(value, "iso_format"):
+        return value.iso_format()
+    # Neo4j Path
+    if hasattr(value, "nodes") and hasattr(value, "relationships"):
+        return str(value)
+    # Neo4j Node — labels + properties
+    if hasattr(value, "labels") and hasattr(value, "items"):
+        return {"_labels": sorted(value.labels), **{k: _to_plain(v) for k, v in value.items()}}
+    # Neo4j Relationship
+    if hasattr(value, "type") and hasattr(value, "items"):
+        return {"_type": value.type, **{k: _to_plain(v) for k, v in value.items()}}
+    # neo4j.time / DateTime-like, bytes, etc.
+    return str(value)
 
 
 def _strip_fences(text: str) -> str:
@@ -71,6 +101,8 @@ def assert_read_only(cypher: str) -> None:
 
 def generate_cypher(question: str, llm=None) -> str:
     """Ask the LLM for a single read-only Cypher query."""
+    from bonus.llm import get_llm
+
     llm = llm or get_llm(temperature=0)
     prompt = f"""{GRAPH_SCHEMA}
 
@@ -98,22 +130,15 @@ def run_cypher(driver, cypher: str) -> list[dict[str, Any]]:
         records = list(session.run(cypher))
     rows: list[dict[str, Any]] = []
     for record in records:
-        row = {}
-        for key in record.keys():
-            value = record[key]
-            # Neo4j temporal / path objects → str for display
-            if hasattr(value, "iso_format"):
-                row[key] = value.iso_format()
-            elif hasattr(value, "nodes") and hasattr(value, "relationships"):
-                row[key] = str(value)
-            else:
-                row[key] = value
+        row = {key: _to_plain(record[key]) for key in record.keys()}
         rows.append(row)
     return rows
 
 
 def summarise_answer(question: str, cypher: str, rows: list[dict], llm=None) -> str:
     """Turn raw rows into an investigator-style natural language answer."""
+    from bonus.llm import get_llm
+
     llm = llm or get_llm(temperature=0.2)
     preview = rows[:25]
     prompt = f"""You are a sharp insurance fraud investigator briefing a colleague.
@@ -141,6 +166,8 @@ def ask(question: str, driver=None, llm=None) -> dict[str, Any]:
     Returns:
         {question, cypher, rows, answer, error?}
     """
+    from bonus.llm import get_llm
+
     close_driver = False
     if driver is None:
         driver = get_driver()
@@ -168,3 +195,85 @@ def ask(question: str, driver=None, llm=None) -> dict[str, Any]:
     finally:
         if close_driver:
             driver.close()
+
+
+def _ask_worker(question: str, out_path: str) -> None:
+    """Child-process entry: run ask() and write JSON (isolates gRPC segfaults)."""
+    import json
+    from pathlib import Path
+
+    from dotenv import load_dotenv
+
+    root = Path(__file__).resolve().parent.parent
+    load_dotenv(root / ".env")
+    try:
+        result = ask(question)
+    except Exception as exc:
+        result = {
+            "question": question,
+            "cypher": "",
+            "rows": [],
+            "answer": f"Investigation stalled: {exc}",
+            "error": str(exc),
+        }
+    Path(out_path).write_text(json.dumps(result, default=str), encoding="utf-8")
+
+
+def ask_in_subprocess(question: str, timeout_s: int = 180) -> dict[str, Any]:
+    """
+    Run ask() in a spawned subprocess.
+
+    On macOS, Gemini/gRPC + Streamlit in one process can segfault after a
+    question; isolating the LLM call keeps the UI alive.
+    """
+    import json
+    import tempfile
+    from multiprocessing import get_context
+    from pathlib import Path
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
+        out_path = tmp.name
+
+    ctx = get_context("spawn")
+    proc = ctx.Process(target=_ask_worker, args=(question, out_path))
+    proc.start()
+    proc.join(timeout=timeout_s)
+
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(5)
+        return {
+            "question": question,
+            "cypher": "",
+            "rows": [],
+            "answer": "Investigation timed out. Try a shorter question.",
+            "error": "timeout",
+        }
+
+    out = Path(out_path)
+    try:
+        if proc.exitcode not in (0, None):
+            return {
+                "question": question,
+                "cypher": "",
+                "rows": [],
+                "answer": (
+                    "Investigation process crashed (often a macOS + gRPC issue). "
+                    "Click the case-file card again — the UI should still be up."
+                ),
+                "error": f"exitcode={proc.exitcode}",
+            }
+        if not out.exists() or out.stat().st_size == 0:
+            return {
+                "question": question,
+                "cypher": "",
+                "rows": [],
+                "answer": "Investigation returned no result. Try again.",
+                "error": "empty",
+            }
+        return json.loads(out.read_text(encoding="utf-8"))
+    finally:
+        try:
+            out.unlink(missing_ok=True)
+        except OSError:
+            pass

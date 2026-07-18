@@ -105,34 +105,52 @@ HAVING claims_witnessed > 1
 # under different policy numbers.
 
 QUERY_RING_C = """
-TODO: Write a Cypher query that finds claimants sharing
-the same phone number but registered under different names.
+TODO: Find identity cycling — same phone with multiple name aliases
+and/or multiple policies stacked on that identity.
 
-Return: shared phone number, list of names using that phone,
-        list of policy numbers associated.
+Ring C detail: the three name variants share ONE Ghana Card id, so they
+MERGE into a single Claimant node. Writers store every seen name on
+c.aliases. Your query should use aliases (and/or multiple policies),
+not only collect(DISTINCT c.name).
 
-Hint:
-MATCH (c1:Claimant)-[:HAS_POLICY]->(p:Policy),
-      (c2:Claimant)-[:HAS_POLICY]->(p2:Policy)
-WHERE c1.phone = c2.phone AND c1.name <> c2.name
-RETURN c1.phone as shared_phone,
-       collect(DISTINCT c1.name) + collect(DISTINCT c2.name) as names,
-       collect(DISTINCT p.number) + collect(DISTINCT p2.number) as policies
+Return: shared_phone, names, policies
+
+Hint shape:
+MATCH (c:Claimant)
+WHERE c.phone IS NOT NULL
+OPTIONAL MATCH (c)-[:HAS_POLICY]->(p:Policy)
+WITH c.phone AS shared_phone,
+     coalesce(c.aliases, [c.name]) AS names,
+     collect(DISTINCT p.number) AS policies
+WHERE size(names) > 1 OR size([x IN policies WHERE x IS NOT NULL]) > 1
+RETURN shared_phone, names, policies
 """
 
 
 # ── Query 5: Overbilling Detection ────────────────────────────────────────────
-# Find providers billing significantly above the average claim amount.
-# Compare each provider's average billing to the overall average.
+# Find providers billing significantly above a fair baseline.
+# Do NOT use a single global average that includes the fraud claims themselves —
+# that pulls the bar up and can hide MediQuick. Compare each provider to the
+# average of claims they did NOT bill.
 
 QUERY_OVERBILLING = """
-TODO: Write a Cypher query that:
-1. Calculates the overall average claim amount
-2. Returns each provider with their avg billing
-3. Flags providers billing more than 2x the average
+TODO: Flag providers whose avg claim amount is > 2× the baseline
+average of claims NOT billed by that provider.
 
-Return: provider name, their avg amount, overall avg, multiple (ratio)
+Return: provider, avg_billed, baseline_avg, multiple
 Order by multiple descending.
+
+Hint:
+MATCH (p:Provider)<-[:BILLED_BY]-(c:Claim)
+WHERE c.amount IS NOT NULL
+WITH p, avg(c.amount) AS avg_billed, collect(elementId(c)) AS billed_ids
+MATCH (other:Claim)
+WHERE other.amount IS NOT NULL AND NOT elementId(other) IN billed_ids
+WITH p, avg_billed, avg(other.amount) AS baseline_avg
+WHERE avg_billed > 2 * baseline_avg
+RETURN p.name AS provider, avg_billed, baseline_avg,
+       avg_billed / baseline_avg AS multiple
+ORDER BY multiple DESC
 """
 
 
@@ -212,7 +230,7 @@ def run_fraud_detection():
 
     run_query(driver, "Query 5 — Overbilling Detection",
               QUERY_OVERBILLING,
-              ["provider", "avg_billed", "overall_avg", "multiple"])
+              ["provider", "avg_billed", "baseline_avg", "multiple"])
 
     console.print(Panel(
         "[bold green]Fraud Rings Exposed![/bold green]\n\n"

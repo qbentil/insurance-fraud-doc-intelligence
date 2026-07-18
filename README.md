@@ -40,6 +40,12 @@ insurance-fraud-doc-intelligence/
 │   ├── 02_graph.py                  ← Phase 3: Graph population skeleton
 │   └── 03_query.py                  ← Phase 4: Fraud detection queries
 │
+├── final/                           ← REFERENCE SOLUTIONS (don't peek early)
+│   ├── README.md
+│   ├── 01_extract.py                ← Complete Phase 2
+│   ├── 02_graph.py                  ← Complete Phase 3
+│   └── 03_query.py                  ← Complete Phase 4
+│
 ├── bonus/                           ← OPTIONAL (if time) Investigator Chat UI
 │   ├── README.md
 │   ├── app.py                       ← Streamlit NL → Cypher chat
@@ -130,6 +136,8 @@ python starter/schemas.py
 | **2 — Graph** | 45 min | `starter/02_graph.py` | JSON entities → Neo4j nodes & relationships |
 | **3 — Query** | 25 min | `starter/03_query.py` | Cypher queries expose the fraud rings |
 | **Bonus** | if time | `bonus/app.py` | NL → Cypher investigator chat with the graph |
+
+> Stuck after the session? Compare your work to [`final/`](final/) — complete solutions with step comments.
 
 ---
 

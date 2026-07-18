@@ -26,6 +26,12 @@ python -m streamlit run bonus/app.py
 
 Open the local URL Streamlit prints (usually http://localhost:8501).
 
+If the process dies with `zsh: segmentation fault` after a question (macOS):
+
+1. Restart with: `streamlit run bonus/app.py` (config sets `fileWatcherType = none`)
+2. The app runs each investigation in a **subprocess** so a gRPC crash should not kill the UI
+3. Ensure the graph is loaded (`python final/02_graph.py`)
+
 ## What to demo
 
 Click the template chips in order:

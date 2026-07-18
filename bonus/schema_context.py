@@ -40,5 +40,5 @@ FRAUD PATTERNS THIS GRAPH CAN REVEAL:
 - Ring A: same Doctor + same Provider across multiple Claimants
 - Ring B: same Witness on multiple unrelated Claims (ghost witness)
 - Ring C: same phone on Claimants with different names (identity cycling)
-- Overbilling: Provider average amount much higher than overall average
+- Overbilling: Provider average much higher than claims they did not bill (baseline)
 """

@@ -7,10 +7,12 @@ YOUR TASK: Complete the TODOs below to build a pipeline that:
   1. Loads each insurance PDF from data/sample_docs/
   2. Classifies it (policy / claim / medical report / invoice / police report)
   3. Extracts structured entities using an LLM + Pydantic schemas
-  4. Saves results to extracted_data.json for Phase 3
+  4. Saves results/by_file/<stem>.json as each PDF finishes, then refreshes
+     classification.json, extraction.json, and combined.json
 
 Run from the repo root:
     python starter/01_extract.py
+    python starter/01_extract.py --file some.pdf   # cheap single-file test
 """
 
 from __future__ import annotations
@@ -208,8 +210,130 @@ def extract_entities(text: str, doc_type: DocumentType, llm) -> dict:
 
 # ── Step 5: Run the full pipeline ────────────────────────────────────────────
 
-def run_extraction():
-    """Main pipeline: load → classify → extract → save."""
+def _resolve_pdf_files(docs_path: Path, only_file: str | None) -> list[Path]:
+    """All PDFs under docs_path, or a single file for --file tests."""
+    if not only_file:
+        return sorted(docs_path.glob("*.pdf"))
+
+    raw = Path(only_file)
+    if raw.is_absolute():
+        candidates = [raw]
+    else:
+        # Accept bare name, repo-relative path, or cwd-relative path
+        candidates = [
+            Path.cwd() / raw,
+            _ROOT / raw,
+            docs_path / raw.name,
+            docs_path / raw,
+        ]
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return [candidate.resolve()]
+
+    tried = "\n".join(f"  - {c}" for c in candidates)
+    raise FileNotFoundError(
+        f"PDF not found: {only_file}\nTried:\n{tried}\n"
+        f"Tip: pass a filename under {docs_path}, a path from the repo root, "
+        "or an absolute path."
+    )
+
+
+def _save_results(output_path: Path, new_results: list[dict], merge: bool) -> None:
+    """
+    Full run: overwrite JSON.
+    Single-file run: merge/replace entries by `file` name so other docs stay.
+    """
+    if merge and output_path.exists():
+        with open(output_path) as f:
+            existing = json.load(f)
+        by_name = {row.get("file"): row for row in existing if row.get("file")}
+        for row in new_results:
+            by_name[row["file"]] = row
+        payload = list(by_name.values())
+    else:
+        payload = new_results
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
+        json.dump(payload, f, indent=2, default=str)
+
+
+def _split_outputs(combined: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+    """Split combined rows into classification / extraction / combined views."""
+    classifications: list[dict] = []
+    extractions: list[dict] = []
+    for row in combined:
+        classifications.append(
+            {"file": row.get("file"), "doc_type": row.get("doc_type")}
+        )
+        entities = {k: v for k, v in row.items() if k not in ("file", "doc_type")}
+        extractions.append({"file": row.get("file"), **entities})
+    return classifications, extractions, combined
+
+
+def _results_dirs() -> tuple[Path, Path]:
+    results_dir = _ROOT / "results"
+    by_file_dir = results_dir / "by_file"
+    return results_dir, by_file_dir
+
+
+def _clear_by_file() -> None:
+    """Full-batch runs start clean so stale PDFs don't linger."""
+    _, by_file_dir = _results_dirs()
+    if not by_file_dir.exists():
+        return
+    for path in by_file_dir.glob("*.json"):
+        path.unlink()
+
+
+def _write_by_file(row: dict) -> Path:
+    """One combined record per PDF under results/by_file/<stem>.json."""
+    _, by_file_dir = _results_dirs()
+    by_file_dir.mkdir(parents=True, exist_ok=True)
+    path = by_file_dir / f"{Path(row['file']).stem}.json"
+    with open(path, "w") as f:
+        json.dump(row, f, indent=2, default=str)
+    return path
+
+
+def _load_all_by_file() -> list[dict]:
+    """Reassemble combined rows from per-file JSON (crash-recovery source of truth)."""
+    _, by_file_dir = _results_dirs()
+    if not by_file_dir.exists():
+        return []
+    rows: list[dict] = []
+    for path in sorted(by_file_dir.glob("*.json")):
+        with open(path) as f:
+            rows.append(json.load(f))
+    return rows
+
+
+def _rebuild_aggregates() -> Path:
+    """Rewrite classification / extraction / combined from results/by_file/."""
+    results_dir, _ = _results_dirs()
+    combined = _load_all_by_file()
+    classifications, extractions, combined = _split_outputs(combined)
+    _save_results(results_dir / "classification.json", classifications, merge=False)
+    _save_results(results_dir / "extraction.json", extractions, merge=False)
+    _save_results(results_dir / "combined.json", combined, merge=False)
+    return results_dir
+
+
+def _persist_result(row: dict) -> None:
+    """Crash-safe: write per-file combined JSON, then refresh the three aggregates."""
+    _write_by_file(row)
+    _rebuild_aggregates()
+
+
+def run_extraction(only_file: str | None = None):
+    """Main pipeline: load → classify → extract → save-as-you-go.
+
+    Args:
+        only_file: Optional PDF name or path. If set, process just that file
+                   (keeps other by_file entries). If None, clear by_file and
+                   process all.
+    """
 
     console.rule("[bold cyan]Phase 2: Document Extraction[/bold cyan]")
 
@@ -221,8 +345,16 @@ def run_extraction():
     if not docs_path.is_absolute():
         docs_path = _ROOT / docs_path
 
-    pdf_files = sorted(docs_path.glob("*.pdf"))
-    console.print(f"Found [bold]{len(pdf_files)}[/bold] documents in {docs_path}\n")
+    pdf_files = _resolve_pdf_files(docs_path, only_file)
+    mode = "single-file" if only_file else "all"
+    console.print(
+        f"Mode: [bold]{mode}[/bold] · "
+        f"[bold]{len(pdf_files)}[/bold] document(s) in {docs_path}\n"
+    )
+
+    # Full batch: wipe per-file cache so aggregates match this run only
+    if not only_file:
+        _clear_by_file()
 
     results = []
     errors = []
@@ -230,7 +362,8 @@ def run_extraction():
     for pdf_path in track(pdf_files, description="Extracting..."):
         try:
             # TODO: Call load_pdf, classify_document, extract_entities
-            # Append a result dict with "file", "doc_type", and extracted fields
+            # Build a combined row, then call _persist_result(row) so a crash
+            # mid-batch does not lose finished PDFs.
             #
             # Example shape:
             #   text = load_pdf(pdf_path)
@@ -238,24 +371,44 @@ def run_extraction():
             #   if doc_type == DocumentType.UNKNOWN:
             #       raise ValueError("Could not classify document")
             #   entities = extract_entities(text, doc_type, llm)
-            #   results.append({"file": pdf_path.name, "doc_type": doc_type.value, **entities})
+            #   entities.pop("document_type", None)  # schema echo — routing uses doc_type
+            #   row = {"file": pdf_path.name, "doc_type": doc_type.value, **entities}
+            #   results.append(row)
+            #   _persist_result(row)  # by_file/<stem>.json + refresh aggregates
+            #   console.print(f"[green]✓[/green] {pdf_path.name} → {doc_type.value}")
             pass  # ← Replace this with your implementation
 
         except Exception as e:
             errors.append({"file": pdf_path.name, "error": str(e)})
             console.print(f"[red]✗[/red] {pdf_path.name}: {e}")
 
-    output_path = _ROOT / "extracted_data.json"
-    with open(output_path, "w") as f:
-        json.dump(results, f, indent=2, default=str)
+    # Final aggregate refresh from by_file (source of truth) — save helpers are provided
+    results_dir = _rebuild_aggregates()
 
     console.print()
     console.rule("[bold green]Extraction Complete[/bold green]")
-    console.print(f"[green]{len(results)}[/green] documents extracted")
+    console.print(f"[green]{len(results)}[/green] documents extracted this run")
     console.print(f"[red]{len(errors)}[/red] errors")
-    console.print(f"Saved to [bold]{output_path}[/bold]")
+    console.print(f"Saved to [bold]{results_dir}[/bold]/")
+    console.print("  · by_file/<stem>.json  (combined, one per PDF — written as you go)")
+    console.print("  · classification.json  (file + doc_type)")
+    console.print("  · extraction.json      (file + entities)")
+    console.print("  · combined.json        (file + doc_type + entities) ← Phase 3")
     console.print("\nNext: [bold]python starter/02_graph.py[/bold]")
 
 
 if __name__ == "__main__":
-    run_extraction()
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Extract structured entities from insurance PDFs."
+    )
+    parser.add_argument(
+        "--file",
+        dest="only_file",
+        default=None,
+        help="Process a single PDF (name under data/sample_docs/ or absolute path). "
+        "Merges into results/*.json. Omit to process all PDFs.",
+    )
+    args = parser.parse_args()
+    run_extraction(only_file=args.only_file)

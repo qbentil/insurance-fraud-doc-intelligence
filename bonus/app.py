@@ -15,6 +15,10 @@ import os
 import sys
 from pathlib import Path
 
+# Set before Streamlit / native watchers initialise (helps macOS segfaults)
+os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
+os.environ.setdefault("GRPC_POLL_STRATEGY", "poll")
+
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -24,7 +28,7 @@ if str(_ROOT) not in sys.path:
 
 load_dotenv(_ROOT / ".env")
 
-from bonus.nl2cypher import ask, get_driver, node_count  # noqa: E402
+from bonus.nl2cypher import ask_in_subprocess, get_driver, node_count  # noqa: E402
 
 # Short label + full question (cards show label; click sends full question)
 CASE_FILE = [
@@ -220,6 +224,39 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
+@st.cache_resource
+def _neo4j_driver():
+    """One shared driver for the Streamlit process — open/close per rerun can segfault on macOS."""
+    driver = get_driver()
+    driver.verify_connectivity()
+    return driver
+
+
+def _show_rows(rows: list) -> None:
+    """Render query rows without pyarrow/st.dataframe (avoids macOS segfaults)."""
+    if not rows:
+        st.write("No rows returned.")
+        return
+    # Prefer a simple markdown table; fall back to JSON
+    keys = list(rows[0].keys())
+    header = "| " + " | ".join(str(k) for k in keys) + " |"
+    sep = "| " + " | ".join("---" for _ in keys) + " |"
+    lines = [header, sep]
+    for row in rows[:50]:
+        cells = []
+        for key in keys:
+            value = row.get(key)
+            text = str(value).replace("|", "\\|").replace("\n", " ")
+            if len(text) > 80:
+                text = text[:77] + "..."
+            cells.append(text)
+        lines.append("| " + " | ".join(cells) + " |")
+    st.markdown("\n".join(lines))
+    if len(rows) > 50:
+        st.caption(f"Showing 50 of {len(rows)} rows.")
+
+
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -238,10 +275,8 @@ with st.sidebar:
 
     graph_nodes = None
     try:
-        driver = get_driver()
-        driver.verify_connectivity()
+        driver = _neo4j_driver()
         graph_nodes = node_count(driver)
-        driver.close()
         st.success(f"Connected · {graph_nodes} nodes")
     except Exception as exc:
         st.error(f"Neo4j not ready: {exc}")
@@ -321,10 +356,7 @@ for msg in st.session_state.messages:
                 st.code(msg["cypher"], language="cypher")
         if msg.get("rows") is not None:
             with st.expander(f"Results ({len(msg['rows'])} row(s))"):
-                if msg["rows"]:
-                    st.dataframe(msg["rows"], use_container_width=True, hide_index=True)
-                else:
-                    st.write("No rows returned.")
+                _show_rows(msg["rows"])
 
 # ── Input ─────────────────────────────────────────────────────────────────────
 
@@ -333,29 +365,16 @@ if "pending_question" in st.session_state:
     prompt = st.session_state.pop("pending_question")
 
 if prompt:
+    # Persist first, then rerun so we never mix inline widgets + history in one pass
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    with st.chat_message("assistant"):
-        with st.spinner("NL → Cypher → Neo4j…"):
-            result = ask(prompt)
-        st.markdown(result["answer"])
-        if result.get("cypher"):
-            with st.expander("Cypher used", expanded=True):
-                st.code(result["cypher"], language="cypher")
-        rows = result.get("rows") or []
-        with st.expander(f"Results ({len(rows)} row(s))"):
-            if rows:
-                st.dataframe(rows, use_container_width=True, hide_index=True)
-            else:
-                st.write("No rows returned.")
-
+    with st.spinner("NL → Cypher → Neo4j…"):
+        result = ask_in_subprocess(prompt)
     st.session_state.messages.append(
         {
             "role": "assistant",
-            "content": result["answer"],
+            "content": result.get("answer", ""),
             "cypher": result.get("cypher", ""),
             "rows": result.get("rows", []),
         }
     )
+    st.rerun()
