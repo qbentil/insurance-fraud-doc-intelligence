@@ -30,7 +30,7 @@ load_dotenv(_ROOT / ".env")
 
 from bonus.nl2cypher import ask_in_subprocess, get_driver, node_count  # noqa: E402
 
-# Short label + full question (cards show label; click sends full question)
+# Full question shown on each card (one per row); click runs that investigation
 CASE_FILE = [
     {
         "ring": "Lead",
@@ -129,30 +129,34 @@ h1, h2, h3 {
   margin: 0.5rem 0 0.75rem 0;
 }
 
-/* Template card buttons */
-div[data-testid="stHorizontalBlock"] button[kind="secondary"],
-div[data-testid="stHorizontalBlock"] button {
+/* Case-file buttons — full width, one question per row */
+div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] button,
+button[kind="secondary"],
+button[kind="primary"] {
   background: linear-gradient(165deg, #1c2420 0%, #151a17 100%) !important;
   border: 1px solid rgba(196, 165, 116, 0.28) !important;
   border-radius: 10px !important;
   color: #e8e4db !important;
   text-align: left !important;
-  padding: 0.85rem 1rem !important;
+  justify-content: flex-start !important;
+  padding: 0.85rem 1.1rem !important;
   height: auto !important;
-  min-height: 4.5rem !important;
+  min-height: 3.25rem !important;
   white-space: normal !important;
-  line-height: 1.35 !important;
+  line-height: 1.4 !important;
   font-weight: 500 !important;
   box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset;
   transition: border-color 0.15s ease, transform 0.15s ease;
 }
-div[data-testid="stHorizontalBlock"] button:hover {
+div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] button:hover,
+button[kind="secondary"]:hover {
   border-color: rgba(196, 165, 116, 0.65) !important;
   transform: translateY(-1px);
 }
-div[data-testid="stHorizontalBlock"] button p {
+div[data-testid="stButton"] button p {
   text-align: left !important;
   white-space: normal !important;
+  width: 100%;
 }
 
 .ring-tag {
@@ -296,6 +300,8 @@ with st.sidebar:
     )
     if st.button("Clear chat", use_container_width=True):
         st.session_state.messages = []
+        st.session_state.pop("investigating", None)
+        st.session_state.pop("pending_question", None)
         st.rerun()
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -323,27 +329,21 @@ st.markdown(
 
 st.markdown('<p class="case-label">Case file</p>', unsafe_allow_html=True)
 
-for row_start in range(0, len(CASE_FILE), 2):
-    c1, c2 = st.columns(2, gap="medium")
-    for col, item in zip((c1, c2), CASE_FILE[row_start : row_start + 2]):
-        with col:
-            # Button label: ring tag + short title (keeps cards compact)
-            btn_label = f"{item['ring']}  ·  {item['label']}"
-            if st.button(
-                btn_label,
-                key=f"tpl_{row_start}_{item['label']}",
-                use_container_width=True,
-                help=item["question"],
-            ):
-                st.session_state.pending_question = item["question"]
+for i, item in enumerate(CASE_FILE):
+    if st.button(
+        item["question"],
+        key=f"tpl_{i}",
+        use_container_width=True,
+    ):
+        st.session_state.pending_question = item["question"]
 
-st.caption("Hover a card for the full question. Click to run the investigation.")
+st.caption("Click a question to run the investigation.")
 
 st.markdown("")  # spacer before chat
 
 # ── Chat history ──────────────────────────────────────────────────────────────
 
-if not st.session_state.messages:
+if not st.session_state.messages and "investigating" not in st.session_state:
     st.info(
         "No messages yet — pick a case-file lead above, or type your own question below."
     )
@@ -364,11 +364,26 @@ prompt = st.chat_input("Ask the graph… e.g. Who shares the same witness?")
 if "pending_question" in st.session_state:
     prompt = st.session_state.pop("pending_question")
 
-if prompt:
-    # Persist first, then rerun so we never mix inline widgets + history in one pass
+# Phase 1: show the user question immediately, then come back to investigate
+if prompt and "investigating" not in st.session_state:
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.spinner("NL → Cypher → Neo4j…"):
-        result = ask_in_subprocess(prompt)
+    st.session_state.investigating = prompt
+    st.rerun()
+
+# Phase 2: user message is already visible; show loading while the agent works
+if "investigating" in st.session_state:
+    question = st.session_state.investigating
+    with st.chat_message("assistant"):
+        with st.spinner("NL → Cypher → Neo4j…"):
+            result = ask_in_subprocess(question)
+        st.markdown(result.get("answer", ""))
+        if result.get("cypher"):
+            with st.expander("Cypher used", expanded=True):
+                st.code(result["cypher"], language="cypher")
+        rows = result.get("rows") or []
+        with st.expander(f"Results ({len(rows)} row(s))"):
+            _show_rows(rows)
+
     st.session_state.messages.append(
         {
             "role": "assistant",
@@ -377,4 +392,5 @@ if prompt:
             "rows": result.get("rows", []),
         }
     )
+    del st.session_state.investigating
     st.rerun()
