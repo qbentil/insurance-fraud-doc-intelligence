@@ -1,0 +1,28 @@
+# Environment — NEVER commit these
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+venv/
+.venv/
+env/
+
+# Generated files
+extracted_data.json
+*.log
+
+# Workshop spoiler / speaker notes — share during/after the session, not in the public starter
+docs/FRAUD_SCENARIOS.md
+docs/FACILITATOR_GUIDE.md
+
+# IDE
+.vscode/settings.json
+.idea/
+*.DS_Store
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
