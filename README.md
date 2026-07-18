@@ -129,6 +129,7 @@ python starter/schemas.py
 | **1 — Extract** | 35 min | `starter/01_extract.py` | LangChain parses PDFs → structured JSON |
 | **2 — Graph** | 45 min | `starter/02_graph.py` | JSON entities → Neo4j nodes & relationships |
 | **3 — Query** | 25 min | `starter/03_query.py` | Cypher queries expose the fraud rings |
+| **Bonus** | if time | `bonus/app.py` | NL → Cypher investigator chat with the graph |
 
 ---
 
