@@ -239,12 +239,6 @@ if __name__ == "__main__":
         checks.append(("❌", "langchain-core", "Run: pip install -r requirements.txt"))
 
     try:
-        import langchain_community  # noqa: F401
-        checks.append(("✅", "langchain-community", ""))
-    except ImportError:
-        checks.append(("❌", "langchain-community", "Run: pip install -r requirements.txt"))
-
-    try:
         import langchain_openai  # noqa: F401
         checks.append(("✅", "langchain-openai", ""))
     except ImportError:

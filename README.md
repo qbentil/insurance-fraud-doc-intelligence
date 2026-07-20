@@ -11,7 +11,7 @@
 
 A production-grade document intelligence pipeline that:
 
-1. **Ingests** messy insurance PDFs (claim forms, medical reports, invoices, police reports)
+1. **Ingests** messy insurance PDFs as multimodal inputs (the LLM sees the file)
 2. **Extracts** structured entities using LangChain + an LLM (OpenAI or Gemini)
 3. **Maps** those entities into a Neo4j Knowledge Graph
 4. **Queries** the graph with Cypher to **expose hidden fraud rings**
@@ -132,7 +132,7 @@ python starter/schemas.py
 | Phase | Time | File | What Happens |
 |-------|------|------|-------------|
 | **0 — Setup** | 15 min | — | Fork, clone, secrets check, Neo4j connect |
-| **1 — Extract** | 35 min | `starter/01_extract.py` | LangChain parses PDFs → structured JSON |
+| **1 — Extract** | 35 min | `starter/01_extract.py` | Multimodal LLM reads PDFs → structured JSON |
 | **2 — Graph** | 45 min | `starter/02_graph.py` | JSON entities → Neo4j nodes & relationships |
 | **3 — Query** | 25 min | `starter/03_query.py` | Cypher queries expose the fraud rings |
 | **Bonus** | if time | `bonus/app.py` | NL → Cypher investigator chat with the graph |

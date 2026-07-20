@@ -4,7 +4,7 @@
 WORKSHOP PHASE 2 · 35 minutes
 
 YOUR TASK: Complete the TODOs below to build a pipeline that:
-  1. Loads each insurance PDF from data/sample_docs/
+  1. Sends each insurance PDF to a multimodal LLM (file bytes — not scraped text)
   2. Classifies it (policy / claim / medical report / invoice / police report)
   3. Extracts structured entities using an LLM + Pydantic schemas
   4. Saves results/by_file/<stem>.json as each PDF finishes, then refreshes
@@ -17,6 +17,7 @@ Run from the repo root:
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sys
@@ -35,15 +36,12 @@ load_dotenv(_ROOT / ".env")
 console = Console()
 
 # ── Imports you will need ─────────────────────────────────────────────────────
-# TODO: Import the PDF loader
-# Hint: from langchain_community.document_loaders import PyPDFLoader
-
-# TODO: Import the LLM clients (you only need the one matching LLM_PROVIDER)
+# TODO: Import LLM clients (you only need the one matching LLM_PROVIDER)
 #   from langchain_openai import ChatOpenAI
 #   from langchain_google_genai import ChatGoogleGenerativeAI
-
-# TODO: Import prompt helpers
-# Hint: from langchain_core.prompts import ChatPromptTemplate
+#
+# TODO: Import multimodal message helper
+#   from langchain_core.messages import HumanMessage
 
 from starter.schemas import (
     DocumentType,
@@ -75,22 +73,51 @@ def get_llm():
     raise NotImplementedError("TODO: Initialise your LLM in get_llm()")
 
 
-# ── Step 2: Load a PDF ───────────────────────────────────────────────────────
+# ── Step 2: Build a multimodal PDF message ───────────────────────────────────
 
-def load_pdf(path: Path) -> str:
+def pdf_file_block(path: Path) -> dict:
     """
-    TODO: Load a PDF and return its text content as a string.
+    TODO: Read the PDF bytes, base64-encode them, and return a multimodal content block.
 
-    Hint: Use PyPDFLoader from langchain_community.
-    Join all page contents together.
+    Providers differ on the LangChain content-block shape — branch on LLM_PROVIDER:
 
-    Example:
-        loader = PyPDFLoader(str(path))
-        pages = loader.load()
-        return "\\n".join(p.page_content for p in pages)
+      OpenAI (LLM_PROVIDER=openai):
+        {
+            "type": "file",
+            "file": {
+                "filename": path.name,
+                "file_data": f"data:application/pdf;base64,{data}",
+            },
+        }
+
+      Gemini (LLM_PROVIDER=gemini — default):
+        {
+            "type": "media",
+            "mime_type": "application/pdf",
+            "data": <base64 string>,
+        }
+
+    Hint:
+        import base64
+        data = base64.b64encode(path.read_bytes()).decode("utf-8")
+        provider = os.getenv("LLM_PROVIDER", "gemini").lower().strip()
     """
     # TODO: Implement this
-    raise NotImplementedError("TODO: Load the PDF in load_pdf()")
+    raise NotImplementedError("TODO: Build pdf_file_block()")
+
+
+def multimodal_message(instruction: str, path: Path):
+    """
+    TODO: Return a HumanMessage whose content is:
+      1. {"type": "text", "text": instruction}
+      2. pdf_file_block(path)
+
+    Hint:
+        from langchain_core.messages import HumanMessage
+        return HumanMessage(content=[...])
+    """
+    # TODO: Implement this
+    raise NotImplementedError("TODO: Build multimodal_message()")
 
 
 # ── Step 3: Classify the document ────────────────────────────────────────────
@@ -98,7 +125,7 @@ def load_pdf(path: Path) -> str:
 CLASSIFICATION_PROMPT = """
 You are an insurance document classifier for a Ghanaian insurance company.
 
-Read the document text below and classify it into one of these types:
+Look at the attached PDF and classify it into one of these types:
 - policy          → Insurance Policy Certificate
 - claim_form      → Insurance Claim Form
 - medical_report  → Medical Report for Insurance
@@ -107,22 +134,18 @@ Read the document text below and classify it into one of these types:
 - unknown         → Cannot determine
 
 Respond with ONLY one of the exact type strings above. No explanation.
-
-Document:
-{text}
 """
 
 
-def classify_document(text: str, llm) -> DocumentType:
+def classify_document(path: Path, llm) -> DocumentType:
     """
-    TODO: Use the LLM to classify the document.
+    TODO: Classify the PDF with a multimodal LLM call (no text extraction).
 
     Hint:
-        from langchain_core.prompts import ChatPromptTemplate
-        prompt = ChatPromptTemplate.from_template(CLASSIFICATION_PROMPT)
-        chain = prompt | llm
-        result = chain.invoke({"text": text[:3000]})  # truncate to save tokens
-        return DocumentType(result.content.strip().lower())
+        message = multimodal_message(CLASSIFICATION_PROMPT.strip(), path)
+        result = llm.invoke([message])
+        label = result.content.strip().lower().replace("`", "").split()[0]
+        return DocumentType(label)
     """
     # TODO: Implement this
     raise NotImplementedError("TODO: Classify the document in classify_document()")
@@ -132,46 +155,36 @@ def classify_document(text: str, llm) -> DocumentType:
 
 EXTRACTION_PROMPTS = {
     DocumentType.POLICY: """
-Extract all structured fields from this Ghanaian insurance policy certificate.
+Look at the attached Ghanaian insurance policy certificate PDF.
+Extract all structured fields.
 Include coverage_items (checklist bullets) and authorised_officer when present.
 Fill every field in the schema. Use null for missing optional values.
-
-Document:
-{text}
 """,
     DocumentType.CLAIM_FORM: """
-Extract all structured fields from this Ghanaian insurance claim form.
+Look at the attached Ghanaian insurance claim form PDF.
+Extract all structured fields.
 Include insurer (form header), declaration_date, and witness when present.
 Fill every field in the schema. Use null for missing optional values
 (e.g. witness or attending_doctor when absent).
-
-Document:
-{text}
 """,
     DocumentType.MEDICAL_REPORT: """
-Extract all fields from this Ghanaian medical report for insurance.
+Look at the attached Ghanaian medical report for insurance PDF.
+Extract all fields.
 Include icd10_code, presenting_complaints, and medications when present.
 Fill every field in the schema. Use null for missing optional values.
-
-Document:
-{text}
 """,
     DocumentType.INVOICE: """
-Extract all fields from this Ghanaian provider invoice.
+Look at the attached Ghanaian provider invoice PDF.
+Extract all fields.
 Include line items and authorised_by when present.
 Fill every field in the schema.
-
-Document:
-{text}
 """,
     DocumentType.POLICE_REPORT: """
-Extract all fields from this Ghana Police Service incident report.
+Look at the attached Ghana Police Service incident report PDF.
+Extract all fields.
 Include incident_time, incident_type, officer_badge, and claim_ref
 (from an explicit field or embedded in the report number, e.g. CLM-...).
 Fill every field in the schema. Use null for missing optional values.
-
-Document:
-{text}
 """,
 }
 
@@ -184,25 +197,16 @@ SCHEMA_MAP = {
 }
 
 
-def extract_entities(text: str, doc_type: DocumentType, llm) -> dict:
+def extract_entities(path: Path, doc_type: DocumentType, llm) -> dict:
     """
-    TODO: Extract structured entities with LangChain structured output.
+    TODO: Extract structured entities from the PDF via multimodal + structured output.
 
     Steps:
-    1. Look up the prompt in EXTRACTION_PROMPTS[doc_type]
-    2. Look up the Pydantic schema in SCHEMA_MAP[doc_type]
-    3. Bind structured output: structured_llm = llm.with_structured_output(schema)
-    4. Build a ChatPromptTemplate and chain: prompt | structured_llm
-    5. Invoke with truncated text (~4000 chars)
-    6. Return model.model_dump()
-
-    Hint:
-        from langchain_core.prompts import ChatPromptTemplate
-        schema = SCHEMA_MAP[doc_type]
-        prompt = ChatPromptTemplate.from_template(EXTRACTION_PROMPTS[doc_type])
-        chain = prompt | llm.with_structured_output(schema)
-        model = chain.invoke({"text": text[:4000]})
-        return model.model_dump()
+    1. Look up EXTRACTION_PROMPTS[doc_type] and SCHEMA_MAP[doc_type]
+    2. structured_llm = llm.with_structured_output(schema)
+    3. message = multimodal_message(instruction, path)
+    4. model = structured_llm.invoke([message])
+    5. return model.model_dump()
     """
     # TODO: Implement this
     raise NotImplementedError("TODO: Extract entities in extract_entities()")
@@ -348,7 +352,7 @@ def run_extraction(only_file: str | None = None):
     pdf_files = _resolve_pdf_files(docs_path, only_file)
     mode = "single-file" if only_file else "all"
     console.print(
-        f"Mode: [bold]{mode}[/bold] · "
+        f"Mode: [bold]{mode}[/bold] · multimodal PDF · "
         f"[bold]{len(pdf_files)}[/bold] document(s) in {docs_path}\n"
     )
 
@@ -361,16 +365,15 @@ def run_extraction(only_file: str | None = None):
 
     for pdf_path in track(pdf_files, description="Extracting..."):
         try:
-            # TODO: Call load_pdf, classify_document, extract_entities
+            # TODO: Call classify_document(pdf_path, llm) and extract_entities(pdf_path, ...)
             # Build a combined row, then call _persist_result(row) so a crash
             # mid-batch does not lose finished PDFs.
             #
             # Example shape:
-            #   text = load_pdf(pdf_path)
-            #   doc_type = classify_document(text, llm)
+            #   doc_type = classify_document(pdf_path, llm)
             #   if doc_type == DocumentType.UNKNOWN:
             #       raise ValueError("Could not classify document")
-            #   entities = extract_entities(text, doc_type, llm)
+            #   entities = extract_entities(pdf_path, doc_type, llm)
             #   entities.pop("document_type", None)  # schema echo — routing uses doc_type
             #   row = {"file": pdf_path.name, "doc_type": doc_type.value, **entities}
             #   results.append(row)
@@ -401,7 +404,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Extract structured entities from insurance PDFs."
+        description="Extract structured entities from insurance PDFs (multimodal)."
     )
     parser.add_argument(
         "--file",
