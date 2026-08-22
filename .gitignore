@@ -22,8 +22,9 @@ results/by_file/*.json
 # Workshop spoiler / speaker notes — share during/after the session, not in the public starter
 docs/FRAUD_SCENARIOS.md
 docs/FACILITATOR_GUIDE.md
-final/
 data/facilitator guide.pdf
+slides/
+speaker-pack/
 
 
 # IDE
